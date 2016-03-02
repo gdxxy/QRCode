@@ -16,6 +16,7 @@
 @property (assign, nonatomic) BOOL isOnlyQRCode; //one meta type: QR code.
 @property (strong, nonatomic) AVCaptureSession *captureSession;
 @property (strong, nonatomic, readwrite) AVCaptureVideoPreviewLayer *videoPreviewLayer;
+@property (strong, nonatomic) NSDate *nextTipDate; // for show tip later
 @end
 
 @implementation QISCaptureManager
@@ -47,10 +48,10 @@
         [AVCaptureDevice requestAccessForMediaType:mediaType completionHandler:^(BOOL granted) {
             if (granted) { // ok
                 [self setupCapture];
-                [self startReader];
+                [self didChangeAccessCameraState:YES];
             }
             else { // denied
-                [self notifyFailedToAccessCamera];
+                [self didChangeAccessCameraState:NO];
             }
         }];
     }
@@ -58,7 +59,7 @@
         [self setupCapture];
     }
     else { // denied or restricted
-        [self notifyFailedToAccessCamera];
+        // TODO nothing
     }
 }
 
@@ -88,10 +89,23 @@
     
     // AVCaptureSession
     self.captureSession = [[AVCaptureSession alloc] init];
+    
+    BOOL isHighPresent = NO;
+    CGSize screenSize = [UIScreen mainScreen].bounds.size;
+    UIUserInterfaceIdiom idiom = [UIDevice currentDevice].userInterfaceIdiom;
+    if (idiom == UIUserInterfaceIdiomPad) { // ipad
+        isHighPresent = YES;
+    }
+    else if (screenSize.height < 480.0+1.0) { // iphone4s/4
+        isHighPresent = YES;
+    }
     // Configure the session to produce lower resolution video frames, if your
     // processing algorithm can cope.
     // Note: if change present size then it need change below method 'rectOfInterest'
-    if ([_captureSession canSetSessionPreset:AVCaptureSessionPreset1920x1080]) {
+    if (isHighPresent) {
+        _captureSession.sessionPreset = AVCaptureSessionPresetHigh;
+    }
+    else if ([_captureSession canSetSessionPreset:AVCaptureSessionPreset1920x1080]) {
         _captureSession.sessionPreset = AVCaptureSessionPreset1920x1080;
     }
     
@@ -117,6 +131,7 @@
     dispatch_queue_t dispatchQueue;
     dispatchQueue = dispatch_queue_create("captureOutputQueue", NULL);
     [captureOutput setMetadataObjectsDelegate:self queue:dispatchQueue];
+    
     //
     if (self.isOnlyQRCode) {
         [captureOutput setMetadataObjectTypes:[NSArray arrayWithObject:AVMetadataObjectTypeQRCode]];
@@ -161,11 +176,15 @@
     
     [_captureSession stopRunning];
     //
-    AVCaptureInput* input = [_captureSession.inputs objectAtIndex:0];
-    [_captureSession removeInput:input];
+    if ([_captureSession.inputs count] > 0) {
+        AVCaptureInput* input = [_captureSession.inputs objectAtIndex:0];
+        [_captureSession removeInput:input];
+    }
     //
-    AVCaptureVideoDataOutput* output = (AVCaptureVideoDataOutput*)[_captureSession.outputs objectAtIndex:0];
-    [_captureSession removeOutput:output];
+    if ([_captureSession.outputs count] > 0) {
+        AVCaptureVideoDataOutput* output = (AVCaptureVideoDataOutput*)[_captureSession.outputs objectAtIndex:0];
+        [_captureSession removeOutput:output];
+    }
     //
     [_videoPreviewLayer removeFromSuperlayer];
     //
@@ -183,14 +202,43 @@
         AVMetadataMachineReadableCodeObject *metadataObj = [metadataObjects objectAtIndex:0];
         NSString *stringValue = metadataObj.stringValue;
         
-        // notify delegate if not nil.
-        if (stringValue != nil && _delegate != nil && [_delegate respondsToSelector:@selector(didOutputDecodeStringValue:)]) {
-            NSString *decodeText = [NSString stringWithString:stringValue];
-            [_delegate didOutputDecodeStringValue:decodeText];
+        // check code type
+        // org.iso.QRCode  org.iso.Code128 org.gs1.EAN-13
+        NSString *codeType = metadataObj.type;
+        if ([codeType hasSuffix:@"QRCode"] || [codeType hasSuffix:@"Code128"]) {
+            // for tip
+            NSDate *currentDate = [NSDate date];
+            if (_nextTipDate != nil) {
+                // compare date
+                if ([currentDate compare:_nextTipDate] == NSOrderedAscending) { //earlier
+                    // not notify delegate, later
+                    return ;
+                }
+                else {
+                    self.nextTipDate = [currentDate dateByAddingTimeInterval:2.0]; //update
+                }
+            }
+            else {
+                self.nextTipDate = [currentDate dateByAddingTimeInterval:2.0];
+            }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (_delegate != nil && [_delegate respondsToSelector:@selector(didDecodeUnmatchType:)]) {
+                    [_delegate didDecodeUnmatchType:codeType];
+                }
+            });
+            return ;
         }
         
+        // notify delegate if not nil.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (stringValue != nil && _delegate != nil && [_delegate respondsToSelector:@selector(didOutputDecodeStringValue:)]) {
+                NSString *decodeText = [NSString stringWithString:stringValue];
+                [_delegate didOutputDecodeStringValue:decodeText];
+            }
+        });
+        
 #ifdef DEBUG
-        [self rectOfInterest];
+        //[self rectOfInterest];
         NSLog(@"didOutputMetadataObjects %@\n", metadataObjects);
 #endif
         
@@ -224,6 +272,7 @@
     }
     
     if (isFixScale) {
+        photoSize = CGSizeMake(1280.0, 720.0); //AVCaptureSessionPresetHigh
         CGFloat p1 = screenSize.height/screenSize.width;
         CGFloat p2 = photoSize.width/photoSize.height;
         if (p1 < p2) {
@@ -259,15 +308,13 @@
     return rectOfInterest;
 }
 
-- (void)notifyFailedToAccessCamera
+- (void)didChangeAccessCameraState:(BOOL)isGranted
 {
-#ifdef DEBUG
-    NSLog(@"AVCaptureDevice auth state for video is denied or restricted\n");
-#endif
-    
-    if (_delegate != nil && [_delegate respondsToSelector:@selector(didFailToAccessCamera)]) {
-        [_delegate didFailToAccessCamera];
-    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (_delegate != nil && [_delegate respondsToSelector:@selector(didChangeAccessCameraState:)]) {
+            [_delegate didChangeAccessCameraState:isGranted];
+        }
+    });
 }
 
 @end

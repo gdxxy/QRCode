@@ -57,9 +57,6 @@
     CGRect cropRect = [QISOverlayView cropRect];
     self.captureManager = [[QISCaptureManager alloc] initWithCropRect:cropRect];
     _captureManager.delegate = self;
-    // add video preview layer
-    [_captureManager.videoPreviewLayer setFrame:self.view.layer.bounds];
-    [self.view.layer addSublayer:_captureManager.videoPreviewLayer];
     //
     [self setupOverlayView];
 }
@@ -68,8 +65,16 @@
 {
     [super viewDidAppear:animated];
     
-    // start capture video
-    [_captureManager startReader];
+    AVAuthorizationStatus authStatus = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
+    if (authStatus == AVAuthorizationStatusAuthorized) { //did granted
+        [self addCapturePreviewSubLayer];
+        // start capture video
+        [_captureManager startReader];
+    }
+    else if(authStatus != AVAuthorizationStatusNotDetermined) { //not granting
+        // alert if not auth
+        [self alertCameraAuth];
+    }
 }
 
 - (void)viewDidDisappear:(BOOL)animated
@@ -108,12 +113,28 @@
     }
 }
 
+// helper
+- (void)addCapturePreviewSubLayer
+{
+    // add video preview layer
+    [_captureManager.videoPreviewLayer setFrame:self.view.layer.bounds];
+    [self.view.layer addSublayer:_captureManager.videoPreviewLayer];
+    
+    // front overlay view
+    [self.view bringSubviewToFront:_overlayView];
+}
+
 #pragma mark - QISCaptureManagerDelegate
 
-- (void)didFailToAccessCamera
+- (void)didChangeAccessCameraState:(BOOL)isGranted
 {
-    // auth state, show alert
-    [self alertCameraAuth];
+    if (isGranted) { // just granted
+        [self addCapturePreviewSubLayer];
+        [_captureManager startReader];
+    }
+    else { // just deny, show alert
+        [self alertCameraAuth];
+    }
 }
 
 - (void)didOutputDecodeStringValue:(NSString*)stringValue

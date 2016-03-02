@@ -12,9 +12,9 @@
 @protocol QISCaptureManagerDelegate <NSObject>
 
 @optional
-- (void)didFailToAccessCamera; // auth state, show alert
+- (void)didChangeAccessCameraState:(BOOL)isGranted;
 - (void)didOutputDecodeStringValue:(NSString*)stringValue;
-
+- (void)didDecodeUnmatchType:(NSString*)codeType;
 
 @end
 
@@ -25,7 +25,8 @@
 
 // crop rect as overlay view
 - (instancetype)initWithCropRect:(CGRect)cropRect;
-//
+
+// start/stop/clear
 - (void)startReader;
 - (void)stopReader;
 - (void)clearCapture;
